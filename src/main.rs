@@ -421,6 +421,8 @@ fn prompt(s: &str) -> io::Result<()> {
 
 fn main() {
     use std::io::{stdin, BufRead, BufReader};
+    let mut interp = Interpreter::new();
+    let mut compiler = RpnCompiler::new();
 
     let stdin = stdin();
     let stdin = stdin.lock();
@@ -438,7 +440,17 @@ fn main() {
                     continue;
                 }
             };
-            println!("{:?}", ast);
+
+            let n = match interp.eval(&ast) {
+                Ok(n) => n,
+                Err(_e) => {
+                    continue;
+                }
+            };
+            println!("{:?}", n);
+
+            let rpn = compiler.compile(&ast);
+            println!("{}", rpn);
         } else {
             break;
         }
@@ -614,7 +626,7 @@ impl Error {
         use self::Error::*;
         use self::ParseError as P;
 
-        let (e, loc): (&StdError, Loc) = match self {
+        let (e, loc): (&dyn StdError, Loc) = match self {
             Lexer(e) => (e, e.loc.clone()),
             Parser(e) => {
                 let loc = match e {
@@ -641,5 +653,116 @@ fn show_trace<E: StdError>(e: E) {
     while let Some(e) = source {
         eprintln!("caused by {}", e);
         source = e.source()
+    }
+}
+
+struct Interpreter;
+
+impl Interpreter {
+    pub fn new() -> Self {
+        Interpreter
+    }
+
+    pub fn eval(&mut self, expr: &AstNode) -> Result<i64, InterpreterError> {
+        match expr.value {
+            AstNodeKind::Num(n) => Ok(n as i64),
+            AstNodeKind::UniOp { ref op, ref e } => {
+                let e = self.eval(e)?;
+                Ok(self.eval_uniop(op, e))
+            }
+            AstNodeKind::BinOp {
+                ref op,
+                ref l,
+                ref r,
+            } => {
+                let l = self.eval(l)?;
+                let r = self.eval(r)?;
+                self.eval_binop(op, l, r)
+                    .map_err(|e| InterpreterError::new(e, expr.loc.clone()))
+            }
+        }
+    }
+
+    fn eval_uniop(&mut self, op: &UniOp, n: i64) -> i64 {
+        use self::UniOpKind::*;
+        match op.value {
+            Plus => n,
+            Minus => -n,
+        }
+    }
+
+    fn eval_binop(&mut self, op: &BinOp, l: i64, r: i64) -> Result<i64, InterpreterErrorKind> {
+        use self::BinOpKind::*;
+        match op.value {
+            Add => Ok(l + r),
+            Sub => Ok(l - r),
+            Mult => Ok(l * r),
+            Div => {
+                if r == 0 {
+                    Err(InterpreterErrorKind::DivisionByZero)
+                } else {
+                    Ok(l / r)
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum InterpreterErrorKind {
+    DivisionByZero,
+}
+
+type InterpreterError = Annot<InterpreterErrorKind>;
+
+struct RpnCompiler;
+impl RpnCompiler {
+    pub fn new() -> Self {
+        RpnCompiler
+    }
+
+    pub fn compile(&mut self, expr: &AstNode) -> String {
+        let mut buf = String::new();
+        self.compile_inner(expr, &mut buf);
+        buf
+    }
+
+    pub fn compile_inner(&mut self, expr: &AstNode, buf: &mut String) {
+        match expr.value {
+            AstNodeKind::Num(n) => buf.push_str(&n.to_string()),
+            AstNodeKind::UniOp { ref op, ref e } => {
+                self.compile_uniop(op, buf);
+                self.compile_inner(e, buf)
+            }
+            AstNodeKind::BinOp {
+                ref op,
+                ref l,
+                ref r,
+            } => {
+                self.compile_inner(l, buf);
+                buf.push_str(" ");
+                self.compile_inner(r, buf);
+                buf.push_str(" ");
+                self.compile_binop(op, buf)
+            }
+        }
+    }
+
+    fn compile_uniop(&mut self, op: &UniOp, buf: &mut String) {
+        use self::UniOpKind::*;
+        match op.value {
+            Plus => buf.push_str("+"),
+            Minus => buf.push_str("-"),
+        }
+    }
+
+    fn compile_binop(&mut self, op: &BinOp, buf: &mut String) {
+        use self::BinOpKind::*;
+        match op.value {
+            Add => buf.push_str("+"),
+            Sub => buf.push_str("-"),
+            Mult => buf.push_str("*"),
+            Div => buf.push_str("/"),
+        }
     }
 }
